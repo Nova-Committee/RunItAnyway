@@ -4,15 +4,15 @@ import org.objectweb.asm.*;
 
 import java.lang.instrument.ClassFileTransformer;
 import java.security.ProtectionDomain;
+import java.util.List;
 
 public class RIATransformer implements ClassFileTransformer {
     @Override
     public byte[] transform(
             ClassLoader loader, String className, Class<?> classBeingRedefined,
             ProtectionDomain protectionDomain, byte[] classfileBuffer) {
-        final boolean fabric = className.equals("net/fabricmc/loader/api/metadata/ModDependency$Kind");
-        final boolean forge = className.equals("net/minecraftforge/fml/loading/moddiscovery/ModInfo$ModVersion");
-        if (!fabric && !forge) return classfileBuffer;
+        final List<RIAPlatform> platforms = RunItAnyway.getPlatform(className);
+        if (platforms == null || platforms.isEmpty()) return classfileBuffer;
         ClassReader cr = new ClassReader(classfileBuffer);
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
         ClassVisitor cv = new ClassVisitor(Opcodes.ASM9, cw) {
@@ -20,15 +20,18 @@ public class RIATransformer implements ClassFileTransformer {
             public MethodVisitor visitMethod(
                     int access, String methodName, String descriptor,
                     String signature, String[] exceptions) {
-                if (methodName.equals(fabric ? "isSoft" : "isMandatory")) {
-                    return new MethodVisitor(Opcodes.ASM9, super.visitMethod(access, methodName, descriptor, signature, exceptions)) {
-                        @Override
-                        public void visitCode() {
-                            super.visitCode();
-                            mv.visitInsn(fabric ? Opcodes.ICONST_1 : Opcodes.ICONST_0);
-                            mv.visitInsn(Opcodes.IRETURN);
-                        }
-                    };
+                for (final RIAPlatform platform : platforms) {
+                    if (methodName.equals(platform.getMethodName())) {
+                        return new MethodVisitor(
+                                Opcodes.ASM9,
+                                super.visitMethod(access, methodName, descriptor, signature, exceptions)) {
+                            @Override
+                            public void visitCode() {
+                                super.visitCode();
+                                platform.getModification().accept(mv);
+                            }
+                        };
+                    }
                 }
                 return super.visitMethod(access, methodName, descriptor, signature, exceptions);
             }
